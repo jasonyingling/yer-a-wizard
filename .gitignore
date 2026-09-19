@@ -1,0 +1,5 @@
+.build/
+*.app/
+diagnostics/*.png
+diagnostics/*.json
+.DS_Store
