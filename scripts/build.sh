@@ -5,7 +5,7 @@ mkdir -p '.build/module-cache' 'Yer a Wizard.app/Contents/MacOS'
 if [[ ! -f Assets/WandIcon.icns || Assets/wand-icon-final.png -nt Assets/WandIcon.icns ]]; then bash scripts/build-icon.sh; fi
 mkdir -p 'Yer a Wizard.app/Contents/Resources'
 cp Assets/WandIcon.icns 'Yer a Wizard.app/Contents/Resources/WandIcon.icns'
-swiftc -O -module-cache-path .build/module-cache Sources/Tracker.swift Sources/Spells.swift Sources/main.swift -o .build/YerAWizard -framework Cocoa -framework AVFoundation -framework CoreImage
+swiftc -O -module-cache-path .build/module-cache Sources/Tracker.swift Sources/Spells.swift Sources/PumpkinGame.swift Sources/MagicCanvas.swift Sources/main.swift -o .build/YerAWizard -framework Cocoa -framework AVFoundation -framework CoreImage -framework SceneKit
 cp .build/YerAWizard 'Yer a Wizard.app/Contents/MacOS/YerAWizard'
 cat > 'Yer a Wizard.app/Contents/Info.plist' <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>

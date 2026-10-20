@@ -187,8 +187,12 @@ final class DrawingView: NSView {
 
 final class FlippedDocument: NSView { override var isFlipped: Bool { true } }
 
-final class App: NSObject, NSApplicationDelegate, AVCaptureVideoDataOutputSampleBufferDelegate, NSTabViewDelegate {
+final class App: NSObject, NSApplicationDelegate, AVCaptureVideoDataOutputSampleBufferDelegate, NSTabViewDelegate, NSWindowDelegate {
     var window: NSWindow!
+    var gameWindow: NSWindow!
+    var magicWindow: NSWindow!
+    let magicCanvas = MagicCanvasView(frame: .zero)
+    let pumpkinGame = PumpkinGameController(saveURL: diagnosticDirectory.appendingPathComponent("pumpkin-autosave.json"))
     let canvas = DrawingView()
     let status = NSTextField(wrappingLabelWithString: "Requesting camera access…")
     let details = NSTextField(wrappingLabelWithString: "")
@@ -233,9 +237,12 @@ final class App: NSObject, NSApplicationDelegate, AVCaptureVideoDataOutputSample
         NSApp.setActivationPolicy(.regular)
         if let data = try? Data(contentsOf: diagnosticDirectory.appendingPathComponent("canvas-autosave.json")), let paths = try? JSONDecoder().decode([[CGPoint]].self, from: data) { canvas.strokes = paths }
         buildUI()
+        buildGameWindow()
+        buildMagicWindow()
         gameTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in self?.tickGame() }
         if CommandLine.arguments.contains("--offline") {
             canvas.mouseMode = true
+            magicCanvas.mouseMode = true
             status.stringValue = "Offline mouse practice"
             connectionLabel.stringValue = "Mouse practice · draw anywhere, then pause."
             return
@@ -263,7 +270,8 @@ final class App: NSObject, NSApplicationDelegate, AVCaptureVideoDataOutputSample
     }
     func buildUI() {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 780), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        window.title = "Yer a Wizard — Wand Studio"
+        window.title = "Yer a Wizard — Developer Studio"
+        window.isReleasedWhenClosed = false
         window.isRestorable = false
         window.minSize = NSSize(width: 940, height: 620)
         window.appearance = NSAppearance(named: .darkAqua)
@@ -358,7 +366,60 @@ final class App: NSObject, NSApplicationDelegate, AVCaptureVideoDataOutputSample
         spellPicker.selectItem(at: Spell.lumos.rawValue); changeSpell(); armHandsFree()
         let mainMenu = NSMenu(); let item = NSMenuItem(); mainMenu.addItem(item)
         let menu = NSMenu(); menu.addItem(withTitle: "Quit Yer a Wizard", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"); item.submenu = menu; NSApp.mainMenu = mainMenu
-        window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        window.center()
+    }
+    func buildGameWindow() {
+        gameWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 820), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        gameWindow.title = "Yer a Wizard — The Pumpkin Atelier"
+        gameWindow.isReleasedWhenClosed = false
+        gameWindow.minSize = NSSize(width: 1000, height: 740)
+        gameWindow.appearance = NSAppearance(named: .darkAqua)
+        gameWindow.contentViewController = pumpkinGame
+        gameWindow.delegate = self
+        pumpkinGame.preview.onSeed = { [weak self] x, y in self?.captureQueue.async { self?.tracker.seed(x: x, y: y) } }
+        let developerMenu = NSMenu(title: "Developer")
+        let openLab = developerMenu.addItem(withTitle: "Open Developer Studio…", action: #selector(openDeveloper), keyEquivalent: "d")
+        openLab.keyEquivalentModifierMask = [.command, .option]; openLab.target = self
+        let drawing = developerMenu.addItem(withTitle: "Return to Magic Canvas", action: #selector(openMagic), keyEquivalent: "1"); drawing.target = self
+        let practice = developerMenu.addItem(withTitle: "Mouse Practice on Magic Canvas", action: #selector(toggleMagicMouse(_:)), keyEquivalent: "m")
+        practice.keyEquivalentModifierMask = [.command, .option]; practice.target = self
+        practice.state = CommandLine.arguments.contains("--offline") ? .on : .off
+        let back = developerMenu.addItem(withTitle: "Open Pumpkin Atelier", action: #selector(openGame), keyEquivalent: "2"); back.target = self
+        let menuItem = NSMenuItem(title: "Developer", action: nil, keyEquivalent: ""); menuItem.submenu = developerMenu; NSApp.mainMenu?.addItem(menuItem)
+        gameWindow.center()
+    }
+    func buildMagicWindow() {
+        magicWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        magicWindow.title = "Yer a Wizard"
+        magicWindow.titleVisibility = .hidden
+        magicWindow.titlebarAppearsTransparent = true
+        magicWindow.backgroundColor = .black
+        magicWindow.appearance = NSAppearance(named: .darkAqua)
+        magicWindow.isReleasedWhenClosed = false
+        magicWindow.isRestorable = false
+        magicWindow.minSize = NSSize(width: 480, height: 320)
+        magicWindow.collectionBehavior = [.fullScreenPrimary]
+        magicWindow.contentView = magicCanvas
+        magicCanvas.cameraPreview.onSeed = { [weak self] x, y in self?.captureQueue.async { self?.tracker.seed(x: x, y: y) } }
+        magicWindow.delegate = self
+        magicWindow.center(); magicWindow.makeKeyAndOrderFront(nil)
+        magicWindow.makeFirstResponder(magicCanvas)
+        NSApp.activate(ignoringOtherApps: true)
+        if !CommandLine.arguments.contains("--windowed") {
+            DispatchQueue.main.async { self.magicWindow.toggleFullScreen(nil) }
+        }
+    }
+    func windowDidResignKey(_ notification: Notification) {
+        if notification.object as? NSWindow === magicWindow { magicCanvas.stopInput() }
+        guard notification.object as? NSWindow === gameWindow else { return }
+        pumpkinGame.finishStroke(); pumpkinGame.carving = false; pumpkinGame.cursor.isHidden = true; pumpkinGame.updateControls()
+    }
+    @objc func openDeveloper() { pumpkinGame.finishStroke(); pumpkinGame.carving = false; pumpkinGame.updateControls(); window.makeKeyAndOrderFront(nil) }
+    @objc func openGame() { gameWindow.makeKeyAndOrderFront(nil) }
+    @objc func openMagic() { magicWindow.makeKeyAndOrderFront(nil); magicWindow.makeFirstResponder(magicCanvas) }
+    @objc func toggleMagicMouse(_ item: NSMenuItem) {
+        magicCanvas.mouseMode.toggle(); item.state = magicCanvas.mouseMode ? .on : .off
+        openMagic()
     }
     func armHandsFree() {
         canvas.finishStroke(); canvas.spell = Spell(rawValue: spellPicker.indexOfSelectedItem) ?? .lumos
@@ -477,7 +538,11 @@ final class App: NSObject, NSApplicationDelegate, AVCaptureVideoDataOutputSample
         let fps = Double(frameCount) / max(1, Date().timeIntervalSince(start))
         DispatchQueue.main.async {
             self.lastFrameTime = Date()
-            self.canvas.camera = image; if !self.canvas.mouseMode { self.recordGame(tip); self.canvas.update(tip) }; self.canvas.needsDisplay = true
+            self.canvas.camera = image
+            self.magicCanvas.updateCamera(image, tip: tip, mirrored: self.canvas.mirrored)
+            if self.magicWindow.isKeyWindow { self.magicCanvas.receive(tip, mirrored: self.canvas.mirrored) }
+            self.pumpkinGame.receive(tip, image: image, mirrored: self.canvas.mirrored, message: tip == nil ? "Point your wand at the camera. Click its bright tip to select it." : "Wand connected · ready for magic", active: self.gameWindow.isKeyWindow)
+            if self.window.isKeyWindow && !self.canvas.mouseMode { self.recordGame(tip); self.canvas.update(tip) }; self.canvas.needsDisplay = true
             self.connectionLabel.stringValue = self.canvas.mouseMode ? "Mouse practice · draw anywhere, then pause." : (tip == nil ? "Point the wand at the camera, then draw." : "Wand connected · draw, then pause to cast")
             self.status.stringValue = trackingMessage
             self.qualityHistory.append(tip != nil); if self.qualityHistory.count > 90 { self.qualityHistory.removeFirst() }
@@ -540,7 +605,7 @@ final class App: NSObject, NSApplicationDelegate, AVCaptureVideoDataOutputSample
     }
     @objc func toggleDrawing(_ button: NSButton) { canvas.finishStroke(); canvas.drawing = button.state == .on }
     @objc func togglePreview(_ button: NSButton) { canvas.showCamera = button.state == .on; for preview in previewButtons { preview.state = button.state }; canvas.needsDisplay = true }
-    @objc func toggleMirror(_ button: NSButton) { canvas.finishStroke(); canvas.mirrored = button.state == .on; canvas.needsDisplay = true }
+    @objc func toggleMirror(_ button: NSButton) { canvas.finishStroke(); magicCanvas.stopInput(); canvas.mirrored = button.state == .on; canvas.needsDisplay = true }
     @objc func clear() {
         autosave(backup: true)
         if canvas.spell != nil { canvas.gameStrokes = []; canvas.gameCurrent = []; gamePoints = []; gameHits = 0; gameFrames = 0 }
@@ -562,7 +627,7 @@ final class App: NSObject, NSApplicationDelegate, AVCaptureVideoDataOutputSample
         }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
-    func applicationWillTerminate(_ notification: Notification) { autosave() }
+    func applicationWillTerminate(_ notification: Notification) { pumpkinGame.finishStroke(); pumpkinGame.persist(); autosave() }
     func autosave(backup: Bool = false) {
         let paths = canvas.strokes + (canvas.current.isEmpty ? [] : [canvas.current])
         let name = backup ? "canvas-before-clear-\(Int(Date().timeIntervalSince1970)).json" : "canvas-autosave.json"
@@ -603,6 +668,11 @@ final class App: NSObject, NSApplicationDelegate, AVCaptureVideoDataOutputSample
     }
     func tickGame() {
         let now = Date()
+        magicCanvas.cameraMessage = status.stringValue
+        if !pumpkinGame.mouseMode && Date().timeIntervalSince(lastFrameTime) > 2 {
+            pumpkinGame.cameraStatus.stringValue = status.stringValue
+        }
+        guard window.isKeyWindow else { return }
         if handsFree {
             if let completed = gesture.finishIfIdle(at: now.timeIntervalSinceReferenceDate) {
                 let points = completed.points
@@ -642,6 +712,7 @@ final class App: NSObject, NSApplicationDelegate, AVCaptureVideoDataOutputSample
         if now < canvas.effectUntil || gamePhase == "countdown" { canvas.needsDisplay = true }
     }
     func recordGame(_ tip: Tip?) {
+        guard window.isKeyWindow else { return }
         if handsFree {
             let aspect = canvas.imageRect.width / max(1, canvas.imageRect.height)
             let point = tip.map { CGPoint(x: (canvas.mirrored ? 1 - $0.x : $0.x) * aspect, y: $0.y) }
