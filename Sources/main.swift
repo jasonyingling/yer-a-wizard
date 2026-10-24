@@ -192,6 +192,7 @@ final class App: NSObject, NSApplicationDelegate, AVCaptureVideoDataOutputSample
     var gameWindow: NSWindow!
     var magicWindow: NSWindow!
     let magicCanvas = MagicCanvasView(frame: .zero)
+    let wandVoice = WandVoiceController()
     let pumpkinGame = PumpkinGameController(saveURL: diagnosticDirectory.appendingPathComponent("pumpkin-autosave.json"))
     let canvas = DrawingView()
     let status = NSTextField(wrappingLabelWithString: "Requesting camera access…")
@@ -366,6 +367,7 @@ final class App: NSObject, NSApplicationDelegate, AVCaptureVideoDataOutputSample
         spellPicker.selectItem(at: Spell.lumos.rawValue); changeSpell(); armHandsFree()
         let mainMenu = NSMenu(); let item = NSMenuItem(); mainMenu.addItem(item)
         let menu = NSMenu(); menu.addItem(withTitle: "Quit Yer a Wizard", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"); item.submenu = menu; NSApp.mainMenu = mainMenu
+        mainMenu.addItem(makeEditMenuItem())
         window.center()
     }
     func buildGameWindow() {
@@ -400,6 +402,14 @@ final class App: NSObject, NSApplicationDelegate, AVCaptureVideoDataOutputSample
         magicWindow.minSize = NSSize(width: 480, height: 320)
         magicWindow.collectionBehavior = [.fullScreenPrimary]
         magicWindow.contentView = magicCanvas
+        magicCanvas.onVoiceToggle = { [weak self] in self?.wandVoice.toggleEnabled() }
+        magicCanvas.onVoiceSettings = { [weak self] in self?.wandVoice.showSettings() }
+        magicCanvas.onListenToggle = { [weak self] in self?.wandVoice.toggleManual() }
+        magicCanvas.onWandPresence = { [weak self] wand, active in self?.wandVoice.observe(wand: wand, active: active) }
+        wandVoice.onColor = { [weak self] color in self?.magicCanvas.setWandColor(color) }
+        wandVoice.onState = { [weak self] enabled, automatic, listening, status in
+            self?.magicCanvas.updateVoice(enabled: enabled, automatic: automatic, listening: listening, status: status)
+        }
         magicCanvas.cameraPreview.onSeed = { [weak self] x, y in self?.captureQueue.async { self?.tracker.seed(x: x, y: y) } }
         magicWindow.delegate = self
         magicWindow.center(); magicWindow.makeKeyAndOrderFront(nil)
@@ -410,7 +420,9 @@ final class App: NSObject, NSApplicationDelegate, AVCaptureVideoDataOutputSample
         }
     }
     func windowDidResignKey(_ notification: Notification) {
-        if notification.object as? NSWindow === magicWindow { magicCanvas.stopInput() }
+        if notification.object as? NSWindow === magicWindow {
+            magicCanvas.stopInput(); wandVoice.observe(wand: false, active: false)
+        }
         guard notification.object as? NSWindow === gameWindow else { return }
         pumpkinGame.finishStroke(); pumpkinGame.carving = false; pumpkinGame.cursor.isHidden = true; pumpkinGame.updateControls()
     }
@@ -627,7 +639,7 @@ final class App: NSObject, NSApplicationDelegate, AVCaptureVideoDataOutputSample
         }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
-    func applicationWillTerminate(_ notification: Notification) { pumpkinGame.finishStroke(); pumpkinGame.persist(); autosave() }
+    func applicationWillTerminate(_ notification: Notification) { wandVoice.shutdown(); pumpkinGame.finishStroke(); pumpkinGame.persist(); autosave() }
     func autosave(backup: Bool = false) {
         let paths = canvas.strokes + (canvas.current.isEmpty ? [] : [canvas.current])
         let name = backup ? "canvas-before-clear-\(Int(Date().timeIntervalSince1970)).json" : "canvas-autosave.json"

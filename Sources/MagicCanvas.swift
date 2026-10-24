@@ -164,6 +164,16 @@ final class MagicCanvasView: NSView {
     private var reducedMotion = false
     let cameraPreview = MagicCameraPreview()
     let cameraButton = NSButton(title: "Show webcam", target: nil, action: nil)
+    let colorButton = NSButton(title: "Wand color", target: nil, action: nil)
+    let voiceButton = NSButton(title: "Voice: Off", target: nil, action: nil)
+    let voiceSettingsButton = NSButton(title: "", target: nil, action: nil)
+    let listenButton = NSButton(title: "Listen", target: nil, action: nil)
+    let voiceStatus = NSTextField(wrappingLabelWithString: "")
+    private(set) var wandColor = WandColor(hex: UserDefaults.standard.string(forKey: "wandStreamColor") ?? "") ?? .gold
+    var onVoiceToggle: (() -> Void)?
+    var onVoiceSettings: (() -> Void)?
+    var onListenToggle: (() -> Void)?
+    var onWandPresence: ((Bool, Bool) -> Void)?
     var cameraMessage = "Waiting for the camera…"
     private var lastCameraFrame: TimeInterval?
     private let gold = NSColor(calibratedRed: 1, green: 0.74, blue: 0.32, alpha: 1)
@@ -174,6 +184,9 @@ final class MagicCanvasView: NSView {
 
     override init(frame: NSRect) {
         super.init(frame: frame)
+        // Keep controls composited above the continuously repainted canvas.
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.black.cgColor
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
         setAccessibilityLabel("Magic drawing canvas")
@@ -183,6 +196,22 @@ final class MagicCanvasView: NSView {
         cameraButton.imagePosition = .imageLeading
         cameraButton.toolTip = "Show or hide the webcam. Click the bright wand tip in the preview to select it."
         addSubview(cameraButton)
+        for button in [colorButton, voiceButton, voiceSettingsButton, listenButton] {
+            button.target = self; button.bezelStyle = .rounded; addSubview(button)
+        }
+        colorButton.action = #selector(showColorPicker); colorButton.imagePosition = .imageLeading
+        colorButton.toolTip = "Choose the color of your wand stream"
+        voiceButton.action = #selector(toggleVoice)
+        voiceButton.imagePosition = .imageLeading
+        voiceSettingsButton.action = #selector(showVoiceSettings)
+        voiceSettingsButton.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Voice settings")
+        voiceSettingsButton.toolTip = "Voice settings: API key and automatic listening"
+        voiceSettingsButton.setAccessibilityLabel("Voice settings")
+        listenButton.action = #selector(toggleListening); listenButton.isHidden = true
+        voiceStatus.font = .systemFont(ofSize: 11); voiceStatus.textColor = .secondaryLabelColor
+        voiceStatus.isHidden = true; addSubview(voiceStatus)
+        setWandColor(wandColor, persist: false)
+        updateVoice(enabled: false, automatic: true, listening: false, status: "Voice is off")
         cameraPreview.isHidden = true; cameraPreview.wantsLayer = true
         cameraPreview.layer?.cornerRadius = 12; cameraPreview.layer?.masksToBounds = true
         cameraPreview.layer?.borderWidth = 1
@@ -208,6 +237,12 @@ final class MagicCanvasView: NSView {
     override func layout() {
         super.layout()
         cameraButton.frame = CGRect(x: bounds.maxX - 156, y: bounds.maxY - 60, width: 140, height: 44)
+        colorButton.frame = CGRect(x: 16, y: bounds.maxY - 60, width: 112, height: 44)
+        voiceButton.frame = CGRect(x: 136, y: bounds.maxY - 60, width: 132, height: 44)
+        voiceSettingsButton.frame = CGRect(x: 276, y: bounds.maxY - 60, width: 36, height: 44)
+        listenButton.frame = CGRect(x: 16, y: bounds.maxY - 108, width: 90, height: 36)
+        voiceStatus.frame = CGRect(x: listenButton.isHidden ? 16 : 114, y: bounds.maxY - 108,
+                                   width: listenButton.isHidden ? 296 : 198, height: 40)
         let width = min(280, max(1, bounds.width - 32))
         cameraPreview.frame = CGRect(x: bounds.maxX - width - 16, y: cameraButton.frame.minY - width * 0.75 - 10, width: width, height: width * 0.75)
     }
@@ -218,6 +253,45 @@ final class MagicCanvasView: NSView {
         cameraButton.setAccessibilityValue(cameraPreview.isHidden ? "Hidden" : "Visible")
         cameraPreview.needsDisplay = true
         window?.makeFirstResponder(self)
+    }
+
+    func setWandColor(_ color: WandColor, persist: Bool = true) {
+        wandColor = color
+        if persist { UserDefaults.standard.set(color.hex, forKey: "wandStreamColor") }
+        colorButton.image = NSImage(size: NSSize(width: 14, height: 14), flipped: false) { rect in
+            color.glow.setFill(); NSBezierPath(ovalIn: rect.insetBy(dx: 1, dy: 1)).fill(); return true
+        }
+        colorButton.setAccessibilityValue(color.hex)
+        if NSColorPanel.shared.isVisible { NSColorPanel.shared.color = color.glow }
+        needsDisplay = true
+    }
+
+    @objc func showColorPicker() {
+        let panel = NSColorPanel.shared
+        panel.title = "Wand stream color"; panel.showsAlpha = false; panel.isContinuous = true
+        panel.color = wandColor.glow; panel.setTarget(self); panel.setAction(#selector(pickColor(_:)))
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.makeKeyAndOrderFront(nil)
+    }
+    @objc private func pickColor(_ sender: NSColorPanel) { setWandColor(WandColor(color: sender.color)) }
+    @objc private func toggleVoice() { onVoiceToggle?() }
+    @objc private func showVoiceSettings() { onVoiceSettings?() }
+    @objc private func toggleListening() { onListenToggle?() }
+
+    func updateVoice(enabled: Bool, automatic: Bool, listening: Bool, status: String) {
+        let title = enabled ? (listening ? "Voice: Listening" : "Voice: On") : "Voice: Off"
+        if voiceButton.title != title || voiceButton.image == nil {
+            voiceButton.title = title
+            voiceButton.image = NSImage(systemSymbolName: enabled ? "mic.fill" : "mic.slash", accessibilityDescription: nil)
+        }
+        voiceButton.toolTip = enabled ? "Turn voice off and stop the microphone" : "Enable voice color commands"
+        voiceButton.setAccessibilityValue(enabled ? "On" : "Off")
+        let hideManual = !enabled || automatic
+        if listenButton.isHidden != hideManual { listenButton.isHidden = hideManual; needsLayout = true }
+        listenButton.title = listening ? "Stop" : "Listen"
+        voiceStatus.isHidden = !enabled
+        if voiceStatus.stringValue != status { voiceStatus.stringValue = status }
+        voiceStatus.textColor = listening ? .systemGreen : .secondaryLabelColor
     }
 
     func updateCamera(_ image: CGImage?, tip: Tip?, mirrored: Bool) {
@@ -235,6 +309,9 @@ final class MagicCanvasView: NSView {
         let previous = trail.tip
         let previousStroke = trail.samples.last?.stroke
         trail.receive(point, at: now)
+        // Report acquisition immediately, including a quick mouse-practice stroke
+        // that can begin and end between two animation ticks.
+        onWandPresence?(trail.tip != nil, window?.isKeyWindow == true)
         if trail.tip != nil, promptTarget == 1, promptOpacity > 0.01 {
             dissolvePrompt(at: now)
         }
@@ -270,6 +347,7 @@ final class MagicCanvasView: NSView {
         // A stationary held mouse acts like a stream of stationary camera samples.
         if holdingMouse, let point = trail.tip { trail.receive(point, at: now) }
         trail.advance(at: now, holdingMouse: holdingMouse)
+        onWandPresence?(trail.tip != nil, acceptsInput)
         sparks.removeAll { now - $0.time >= $0.lifetime }
         promptFragments.removeAll { now - $0.time >= $0.lifetime }
         if let point = trail.tip {
@@ -282,7 +360,7 @@ final class MagicCanvasView: NSView {
         if target != promptTarget {
             promptFrom = promptOpacity; promptTarget = target; promptChangedAt = now
             promptTransitionDuration = 0.3
-            setAccessibilityLabel(target == 1 ? "Raise your wand" : "Wand detected. Drawing golden sparks.")
+            setAccessibilityLabel(target == 1 ? "Raise your wand" : "Wand detected. Drawing sparkling light.")
         }
         let progress = min(1, max(0, (now - promptChangedAt) / promptTransitionDuration))
         promptOpacity = promptFrom + (promptTarget - promptFrom) * CGFloat(1 - pow(1 - progress, 3))
@@ -336,7 +414,7 @@ final class MagicCanvasView: NSView {
         }
         promptFrom = promptOpacity; promptTarget = 0; promptChangedAt = now
         promptTransitionDuration = 0.18
-        setAccessibilityLabel("Wand detected. Drawing golden sparks.")
+        setAccessibilityLabel("Wand detected. Drawing sparkling light.")
     }
 
     private func emit(at point: CGPoint, time: TimeInterval) {
@@ -356,6 +434,7 @@ final class MagicCanvasView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         guard let context = NSGraphicsContext.current?.cgContext else { return }
         let now = lastTick
+        let streamGlow = wandColor.glow, streamCore = wandColor.core
         NSColor.black.setFill(); bounds.fill()
         context.setLineCap(.round); context.setLineJoin(.round)
         // Batch by age so glow rendering stays bounded during continuous drawing.
@@ -376,11 +455,11 @@ final class MagicCanvasView: NSView {
         context.setBlendMode(.plusLighter)
         for (index, path) in paths.enumerated() where !path.isEmpty {
             let alpha = CGFloat(index + 1) / 32
-            context.setShadow(offset: .zero, blur: 16, color: gold.withAlphaComponent(alpha * 0.65).cgColor)
-            context.setStrokeColor(gold.withAlphaComponent(alpha * 0.24).cgColor)
+            context.setShadow(offset: .zero, blur: 16, color: streamGlow.withAlphaComponent(alpha * 0.65).cgColor)
+            context.setStrokeColor(streamGlow.withAlphaComponent(alpha * 0.24).cgColor)
             context.setLineWidth(10); context.addPath(path); context.strokePath()
             context.setShadow(offset: .zero, blur: 0, color: nil)
-            context.setStrokeColor(ivory.withAlphaComponent(alpha * 0.95).cgColor)
+            context.setStrokeColor(streamCore.withAlphaComponent(alpha * 0.95).cgColor)
             context.setLineWidth(3.4); context.addPath(path); context.strokePath()
         }
         for spark in sparks {
@@ -392,13 +471,13 @@ final class MagicCanvasView: NSView {
                             y: origin.y + spark.velocity.dy * drift + 40 * drift * drift)
             let twinkle = reducedMotion ? 0.8 : 0.55 + 0.45 * pow(sin(age * 11 + spark.phase), 2)
             let alpha = CGFloat(pow(1 - age / spark.lifetime, 1.3) * twinkle)
-            context.setFillColor(gold.withAlphaComponent(alpha * 0.15).cgColor)
+            context.setFillColor(streamGlow.withAlphaComponent(alpha * 0.15).cgColor)
             context.fillEllipse(in: CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8))
-            context.setFillColor(ivory.withAlphaComponent(alpha).cgColor)
+            context.setFillColor(streamCore.withAlphaComponent(alpha).cgColor)
             let r = spark.size
             context.fillEllipse(in: CGRect(x: p.x - r / 2, y: p.y - r / 2, width: r, height: r))
             if spark.size > 1.4 {
-                context.setStrokeColor(gold.withAlphaComponent(alpha * 0.65).cgColor)
+                context.setStrokeColor(streamGlow.withAlphaComponent(alpha * 0.65).cgColor)
                 context.setLineWidth(0.65)
                 context.move(to: CGPoint(x: p.x - r * 2, y: p.y)); context.addLine(to: CGPoint(x: p.x + r * 2, y: p.y))
                 context.move(to: CGPoint(x: p.x, y: p.y - r * 2)); context.addLine(to: CGPoint(x: p.x, y: p.y + r * 2))
@@ -421,12 +500,12 @@ final class MagicCanvasView: NSView {
         }
         if let point = trail.tip {
             let p = screenPoint(point)
-            let colors = [gold.withAlphaComponent(0.28).cgColor, gold.withAlphaComponent(0).cgColor] as CFArray
+            let colors = [streamGlow.withAlphaComponent(0.28).cgColor, streamGlow.withAlphaComponent(0).cgColor] as CFArray
             if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]) {
                 context.drawRadialGradient(gradient, startCenter: p, startRadius: 0, endCenter: p, endRadius: 23, options: [])
             }
-            context.setShadow(offset: .zero, blur: 9, color: gold.cgColor)
-            context.setFillColor(ivory.cgColor)
+            context.setShadow(offset: .zero, blur: 9, color: streamGlow.cgColor)
+            context.setFillColor(streamCore.cgColor)
             context.fillEllipse(in: CGRect(x: p.x - 2.7, y: p.y - 2.7, width: 5.4, height: 5.4))
         }
         context.restoreGState()

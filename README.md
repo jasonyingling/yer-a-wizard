@@ -20,6 +20,7 @@ The app opens full screen on black. After two seconds, a softly glowing **Raise 
 Each trail sample holds full brightness for 2.65 seconds, then fades over 3.35 seconds, for six seconds total, including while you keep drawing. The text explosion spreads outward and drifts downward for 2.3–3.4 seconds, holding its brightness briefly before fading. Lost tracking stops the stroke immediately. The prompt returns only after every trail and spark has faded and the drawing canvas has stayed black for two seconds. Reacquisition and large detection jumps start new strokes. A stalled camera clears the point automatically. Drawing also stops when the window loses focus. Trails are ephemeral and are not saved.
 
 - **Esc** exits full screen. The green window button re-enters it.
+- **Wand color**, in the bottom-left corner, opens the native color picker. It recolors the visible stream, tip, and sparks immediately and remembers your choice. The prompt and its explosion keep their warm gold styling.
 - **Show webcam**, in the bottom-right corner, toggles a live camera preview. Click the bright wand tip in the preview to select it. The preview uses the existing camera session and mirrors the drawing direction. The button and preview do not affect the drawing canvas’s prompt countdown.
 - **Developer → Open Developer Studio…** (**⌥⌘D**) opens camera calibration and manual tip selection if reflections prevent automatic acquisition.
 - **Developer → Mouse Practice on Magic Canvas** (**⌥⌘M**) toggles click-and-drag practice.
@@ -33,6 +34,20 @@ open 'Yer a Wizard.app' --args --offline
 ```
 
 Add `--windowed` to start in a regular resizable window. Camera permission and connection details are available in Developer Studio if the wand cannot be acquired.
+
+## Voice color commands
+
+Click the **gear beside Voice** to open Voice settings. Paste your own OpenAI API key in the secure field with **⌘V** and click **Save settings**. The character count below the field shows how much was pasted; a green confirmation appears after the full key is saved and read back successfully. This checks local storage, not API access. Click **Done** to close settings. The key is stored in macOS Keychain; never in the repository or diagnostic files. A process-level `OPENAI_API_KEY` is also supported as a fallback. Reopening settings shows **API key saved in Keychain** and its character count. The input stays empty to hide the secret; leave it empty to keep the saved key, or paste a replacement. **Remove saved key** deletes the Keychain entry and switches voice off.
+
+Click **Voice: Off** to enable voice. With **Listen when my wand is raised** checked, a tracked wand starts a Realtime session. Wait for **Voice: Listening**, then say something like **“Change my wand to pink.”** Lowering the wand for 1.5 seconds stops the microphone and closes the connection, allowing short tracking gaps while you finish a phrase. Losing canvas focus stops immediately. Mouse practice can trigger the same workflow while dragging.
+
+Uncheck **Listen when my wand is raised** in settings to use manual mode; the canvas then shows a **Listen / Stop** button. Clicking the main **Voice** button always switches voice fully off. Voice starts off on every app launch, even if it was enabled before quitting. Each listening session is limited to five minutes; toggle voice to start again afterward. Connection and permission failures stop listening and require an explicit retry rather than reconnecting repeatedly.
+
+While listening, microphone audio is sent to OpenAI and billed to your API account. No camera images are sent; no audio or transcripts are saved locally. The app does not speak back. A completed, validated `set_wand_color` function call is the only supported voice action. Background speech can still be interpreted incorrectly, so the picker remains available for immediate correction.
+
+The native app sends mono 24 kHz PCM16 audio over a Realtime WebSocket and uses text/tool output with server voice activity detection, following the [official Realtime conversation documentation](https://developers.openai.com/api/docs/guides/realtime-conversations) and [WebSocket guide](https://developers.openai.com/api/docs/guides/realtime-websocket). The requested `gpt-realtime` model is the default; the settings field allows another `gpt-realtime` model supported by your account. This personal desktop build uses your own key; a distributed app should obtain short-lived client credentials from its backend instead of shipping a shared key.
+
+Voice lifecycle and tool handling are tested with simulated Realtime events and microphone input. A live spoken-command check requires your API key, API billing/access, and microphone permission.
 
 ## The Pumpkin Atelier
 
@@ -115,8 +130,10 @@ The app showed a stable lock on the resting tip and visible loop/line trails dur
 
 ```sh
 python3 scripts/inspect_usb.py
-swiftc -O -module-cache-path .build/module-cache Sources/Tracker.swift Sources/MagicCanvas.swift scripts/test_magic.swift -o .build/test-magic -framework Cocoa
+swiftc -O -module-cache-path .build/module-cache Sources/Tracker.swift Sources/WandColor.swift Sources/MagicCanvas.swift scripts/test_magic.swift -o .build/test-magic -framework Cocoa
 .build/test-magic /tmp
+swiftc -O -module-cache-path .build/module-cache Sources/WandColor.swift Sources/VoiceControl.swift scripts/test_voice.swift -o .build/test-voice -framework Cocoa -framework AVFoundation -framework Security
+.build/test-voice
 swiftc -O -module-cache-path .build/module-cache Sources/Tracker.swift scripts/test_tracker.swift -o .build/test-tracker
 .build/test-tracker
 swiftc -O -module-cache-path .build/module-cache Sources/Spells.swift scripts/test_spells.swift -o .build/test-spells

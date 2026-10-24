@@ -60,6 +60,12 @@ import Cocoa
         view.layoutSubtreeIfNeeded()
         precondition(view.promptOpacity == 0, "Launch starts black")
         precondition(view.cameraPreview.isHidden)
+        view.setWandColor(WandColor(hex: "#FF69B4")!, persist: false)
+        precondition(view.wandColor.hex == "#FF69B4")
+        view.updateVoice(enabled: true, automatic: false, listening: false, status: "Click Listen to speak")
+        precondition(!view.listenButton.isHidden && !view.voiceStatus.isHidden)
+        view.updateVoice(enabled: false, automatic: true, listening: false, status: "Voice is off")
+        precondition(view.listenButton.isHidden && view.voiceStatus.isHidden)
         view.toggleCamera()
         precondition(!view.cameraPreview.isHidden && view.cameraButton.title == "Hide webcam")
         view.toggleCamera()
@@ -74,6 +80,8 @@ import Cocoa
         }
         try snapshot("magic-idle.png")
         let now = ProcessInfo.processInfo.systemUptime
+        var acquisitions = 0
+        view.onWandPresence = { detected, _ in if detected { acquisitions += 1 } }
         let burstView = MagicCanvasView(frame: view.frame)
         burstView.layoutSubtreeIfNeeded()
         burstView.advanceAnimation(at: now + 3, acceptsInput: true)
@@ -125,12 +133,16 @@ import Cocoa
                              area: 10, peak: 255, contrast: 255), mirrored: false, at: now - 3.3 + Double(frame) * 0.033)
         }
         precondition(view.sparks.count > 0 && view.sparks.count <= 1200)
+        precondition(acquisitions > 0, "Wand raises are reported immediately, without waiting for animation ticks")
         try snapshot("magic-trail.png")
+        precondition(view.wandColor.glow.redComponent > view.wandColor.glow.greenComponent, "Picker color reaches the renderer")
         view.setFrameSize(NSSize(width: 600, height: 400))
         view.layoutSubtreeIfNeeded()
         view.toggleCamera()
         try snapshot("magic-resized.png")
         precondition(view.bounds.contains(view.cameraPreview.frame), "Preview fits in a resized canvas")
+        view.setFrameSize(NSSize(width: 480, height: 320)); view.layoutSubtreeIfNeeded()
+        precondition(view.voiceSettingsButton.frame.maxX < view.cameraButton.frame.minX, "Controls fit the minimum window width")
         print("PASS: letter-shaped prompt burst, immediate drawing, downward drift, no duplicate burst, particle expiry, repeat detection, two-second black pause, oldest-first expiry, tracking gaps, bounded storage, webcam toggle, rendering and resizing")
     }
 }
